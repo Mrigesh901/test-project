@@ -59,7 +59,7 @@ Creation of a new API into the shared project that can integrate with smart cont
 - Please add a new API into the backend (Next serverless backend) .
 - And you have to fetch some info on any smart contracts(made by your self) from Solana/EVM chain through the API.
 
-## QA Task
+## DevOps Task
 
 ### Infrastructure Tasks
 - [ ] Provision cloud infrastructure using Terraform
