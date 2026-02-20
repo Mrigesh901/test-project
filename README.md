@@ -59,6 +59,76 @@ Creation of a new API into the shared project that can integrate with smart cont
 - Please add a new API into the backend (Next serverless backend) .
 - And you have to fetch some info on any smart contracts(made by your self) from Solana/EVM chain through the API.
 
+## QA Task
+
+### Infrastructure Tasks
+- [ ] Provision cloud infrastructure using Terraform
+- [ ] Configure VPC, subnets, and networking
+- [ ] Set up Kubernetes cluster (EKS/GKE/AKS)
+- [ ] Configure storage classes and persistent volumes
+- [ ] Implement network policies and security groups
+
+### Containerization Tasks
+- [ ] Create optimized Dockerfiles for all services
+- [ ] Set up multi-stage builds
+- [ ] Configure Docker Compose for local development
+- [ ] Implement image vulnerability scanning
+- [ ] Set up private container registry
+
+### CI/CD Tasks
+- [ ] Configure GitHub Actions workflow
+- [ ] Implement automated testing (unit, integration, e2e)
+- [ ] Set up staging environment
+- [ ] Implement blue-green deployment
+- [ ] Configure automated rollback
+
+### Monitoring Tasks
+- [ ] Deploy Prometheus and Grafana
+- [ ] Create blockchain-specific dashboards
+- [ ] Set up alerting for critical metrics
+- [ ] Implement log aggregation with ELK
+- [ ] Configure distributed tracing
+
+### Blockchain Operations Tasks
+- [ ] Deploy high-availability blockchain nodes
+- [ ] Configure node synchronization
+- [ ] Implement RPC load balancing
+- [ ] Set up validator (if applicable)
+- [ ] Implement failover for blockchain nodes
+
+### Security Tasks
+- [ ] Implement smart contract security scanning
+- [ ] Configure WAF and DDoS protection
+- [ ] Set up secrets management
+- [ ] Implement network encryption
+- [ ] Regular security audit automation
+
+### Disaster Recovery Tasks
+- [ ] Configure automated backups
+- [ ] Implement multi-region failover
+- [ ] Create disaster recovery runbook
+- [ ] Test recovery procedures
+- [ ] Set up cross-region replication
+
+### Performance Tasks
+- [ ] Conduct load testing
+- [ ] Implement auto-scaling
+- [ ] Optimize container images
+- [ ] Configure CDN for frontend
+- [ ] Implement caching strategies
+
+## Success Criteria
+
+1. **Infrastructure**: 99.9% uptime for all services
+2. **Performance**: Response time < 200ms for API calls
+3. **Blockchain**: Node synchronization within 1 hour of deployment
+4. **Security**: Zero critical vulnerabilities in scans
+5. **Backup**: RPO < 1 hour, RTO < 4 hours
+6. **Monitoring**: Complete visibility into all components
+7. **CI/CD**: Deployment time < 10 minutes
+
+
+
 ## Submission
 
 You don’t need to push the result to the repository. We will check the result in the technical interview with our technical leader. Be prepared to demonstrate the feature you implemented and explain your testing approach.
