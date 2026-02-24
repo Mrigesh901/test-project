@@ -20,7 +20,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  REGISTRY_USERNAME: ${{ github.actor }}
+  # REGISTRY_USERNAME: ${{ github.actor }}
 
 jobs:
   build-and-scan:
@@ -54,26 +54,29 @@ jobs:
 
       - name: Determine image tag
         id: tag
-        run: |
-          OWNER=$(echo "${{ github.actor }}" | tr '[:upper:]' '[:lower:]')
+        - name: Determine image tag
+  id: tag
+  run: |
+    OWNER=$(echo "${{ github.actor }}" | tr '[:upper:]' '[:lower:]')
 
-          if [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
-            TAG="dev-${{ github.sha }}"
-            VERSION="0.1.0-dev.${{ github.run_number }}"
-          elif [[ "${{ github.ref }}" == "refs/heads/release" ]]; then
-            # For release branch, use latest tag or v prefix
-            TAG="latest"
-            VERSION="${{ github.sha }}"
-          else
-            TAG="branch-${{ github.ref_name }}"
-            VERSION="0.0.1-pr"
-          fi
-          IMAGE="${{ env.REGISTRY }}/${OWNER}/${{ matrix.image_name }}"
-          echo "owner=${OWNER}" >> $GITHUB_OUTPUT
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "image=${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/${{ matrix.image_name }}" >> $GITHUB_OUTPUT
+    if [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+      TAG="dev-${{ github.sha }}"
+      VERSION="0.1.0-dev.${{ github.run_number }}"
+    elif [[ "${{ github.ref }}" == "refs/heads/release" ]]; then
+      TAG="latest"
+      VERSION="${{ github.sha }}"
+    else
+      TAG="branch-${{ github.ref_name }}"
+      VERSION="0.0.1-pr"
+    fi
 
+    IMAGE="${{ env.REGISTRY }}/${OWNER}/${{ matrix.image_name }}"
+
+    echo "owner=${OWNER}" >> $GITHUB_OUTPUT
+    echo "tag=${TAG}" >> $GITHUB_OUTPUT
+    echo "version=${VERSION}" >> $GITHUB_OUTPUT
+    echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+    
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
