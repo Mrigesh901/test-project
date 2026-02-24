@@ -32,6 +32,7 @@ jobs:
 
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      owner: ${{ steps.owner.outputs.owner }}
 
     steps:
       - name: Checkout code
@@ -96,7 +97,7 @@ jobs:
         run: |
           kubectl create secret docker-registry ghcr-secret \
             --docker-server=${{ env.REGISTRY }} \
-            --docker-username=${{ env.IMAGE_OWNER }} \
+            --docker-username=${{ needs.build-and-push.outputs.owner }} \
             --docker-password=${{ secrets.GHCR_PAT }} \
             --docker-email=dev@example.com \
             -n ${{ env.K8S_NAMESPACE }} \
@@ -111,15 +112,15 @@ jobs:
           TAG=${{ needs.build-and-push.outputs.tag }}
 
           kubectl set image deployment/backend \
-            backend=ghcr.io/${{ env.IMAGE_OWNER }}/test-project-backend:$TAG \
+            backend=ghcr.io/${{ needs.build-and-push.outputs.owner }}/test-project-backend:$TAG \
             -n ${{ env.K8S_NAMESPACE }}
 
           kubectl set image deployment/frontend \
-            frontend=ghcr.io/${{ env.IMAGE_OWNER }}/test-project-frontend:$TAG \
+            frontend=ghcr.io/${{ needs.build-and-push.outputs.owner }}/test-project-frontend:$TAG \
             -n ${{ env.K8S_NAMESPACE }}
 
           kubectl set image deployment/hardhat \
-            hardhat=ghcr.io/${{ env.IMAGE_OWNER }}/test-project-hardhat:$TAG \
+            hardhat=ghcr.io/${{ needs.build-and-push.outputs.owner }}/test-project-hardhat:$TAG \
             -n ${{ env.K8S_NAMESPACE }}
 
       - name: Wait for rollout
