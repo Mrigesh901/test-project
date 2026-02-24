@@ -41,9 +41,9 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Set lowercase image owner
-          id: owner
-          run: |
-            echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+        id: owner
+        run: |
+          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
 
       - name: Generate tag
