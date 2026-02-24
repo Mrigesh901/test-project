@@ -1,1 +1,0 @@
-curl -sfL https://get.k3s.io | K3S_URL=https://44.211.232.250:6443 K3S_TOKEN=K10d6d8ea07eae30a71d25f6737e34c7b8972eb51adac0ef3fd2181e25d588e3620::server:f3e50a5eb9fc6a9fec37bf5948741130 sh -s - agent --node-name worker
