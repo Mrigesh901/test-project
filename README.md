@@ -1,6 +1,6 @@
 ## Frontend task( 30 mins ~ 2 hrs )
 ### **Task Description: Authentication UI & Layout Fix**
-You are tasked with improving the user authentication experience by fixing layout issues and enhancing the login/signup pages.
+You are tasked with improving the user authentication experience by fixing layout issues and enhancing the login/signup pages
 
 **Part 1: Navigation Bar Fix** (30 minutes)
 - **Issue**: Top navigation tabs are misaligned and visually unbalanced
