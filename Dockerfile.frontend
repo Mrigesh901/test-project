@@ -1,0 +1,128 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dockerfile.frontend — Next.js App (Multi-Stage Build)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY MULTI-STAGE?
+# A naive Dockerfile would look like this:
+#
+#   FROM node:18
+#   COPY . .
+#   RUN npm install   ← includes devDependencies (jest, eslint, typescript...)
+#   RUN npm run build
+#   CMD ["npm", "start"]
+#
+# Final image size: ~2GB (full Node + all dev tools + source code + build output)
+# Attack surface: massive (compilers, test tools, source code all in prod)
+#
+# Multi-stage build:
+#   Stage 1: install deps           → discarded after build
+#   Stage 2: build the app          → discarded after build
+#   Stage 3: copy ONLY the output   → this is what runs in production
+#
+# Final image size: ~180MB
+# Attack surface: minimal (only runtime, no source, no build tools)
+#
+# MENTAL MODEL: Like a construction site vs. a finished building.
+# The scaffolding (compilers, dev deps) is used to build it, then removed.
+# Only the finished structure ships.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Stage 1: Dependencies ─────────────────────────────────────────────────────
+# Goal: install node_modules with only production dependencies
+# Why separate from build? If package.json doesn't change, this entire
+# stage is cached — npm install (slowest step) is skipped on rebuilds.
+FROM node:18-alpine AS deps
+
+# WHY ALPINE?
+# node:18 (Debian-based) = ~950MB base image
+# node:18-alpine (Alpine Linux) = ~50MB base image
+# Alpine uses musl libc instead of glibc. Smaller, but some native modules
+# need glibc — that's why we add libc6-compat as a compatibility shim.
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+# CRITICAL LAYER ORDER LESSON:
+# Copy ONLY package files first. Docker invalidates cache layer-by-layer.
+# If we copied all source first, ANY code change would bust the npm install cache.
+# By copying package.json first, npm install only re-runs when dependencies change.
+COPY package.json package-lock.json* ./
+
+# npm ci vs npm install:
+# npm ci = "clean install" — reads package-lock.json exactly, no version resolution.
+# Faster, deterministic, fails if lock file is out of date.
+# Always use npm ci in Docker/CI — never npm install.
+RUN npm install
+
+# ── Stage 2: Build ────────────────────────────────────────────────────────────
+# Goal: compile TypeScript, generate Next.js static output
+# This stage needs devDependencies (TypeScript compiler, etc.)
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+# Copy node_modules from Stage 1 (includes devDeps needed for build)
+COPY --from=deps /app/node_modules ./node_modules
+
+# Now copy source code — this layer changes frequently, but that's OK
+# because npm install is already cached in Stage 1
+COPY . .
+
+# Build-time environment variables
+# NEXT_TELEMETRY_DISABLED: don't send usage data to Vercel
+# NODE_ENV=production: enables Next.js production optimizations
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+
+# next build compiles TypeScript, optimizes pages, generates static HTML
+# Output goes to .next/ directory
+RUN npm run build
+
+# ── Stage 3: Runtime ──────────────────────────────────────────────────────────
+# Goal: minimal image with ONLY what's needed to run the app
+# No source code, no devDependencies, no build tools — nothing extra
+FROM node:18-alpine AS runner
+
+WORKDIR /app
+
+# Security best practice: never run as root in a container.
+# If an attacker exploits the app, they get the "nextjs" user — not root.
+# Root in a container can break out to the host in some configurations.
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser  --system --uid 1001 nextjs
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+# Port the Next.js server listens on inside the container
+ENV PORT=3000
+ENV HOST=0.0.0.0
+
+# Copy ONLY the compiled output from Stage 2 — nothing else
+# .next/standalone = Next.js 13+ output mode: self-contained server.js
+# .next/static     = CSS, JS chunks (served by the standalone server)
+# public/          = static assets (images, fonts)
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+
+# Ensure curl is available for the healthcheck
+USER root
+RUN apk add --no-cache curl && \
+  chown -R nextjs:nodejs /app
+USER nextjs
+
+# Switch to non-root user before the CMD runs
+USER nextjs
+
+# Document that the container listens on port 3000
+# EXPOSE is documentation only — the actual port binding happens in docker-compose
+EXPOSE 3000
+
+# NOTE: Healthcheck disabled
+# The Next.js standalone server binds to the container's internal IP, not localhost
+# This causes healthchecks using localhost/127.0.0.1 to fail even though the app is running
+# The app is ready when logs show "Ready in Xms"
+
+# The actual command to start the server
+# node server.js is the standalone Next.js server generated by next build
+CMD ["node", "server.js"]

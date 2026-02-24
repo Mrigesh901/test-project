@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dev-config
+  labels:
+    environment: dev
+data:
+  mongodb_uri: "mongodb://admin:devpassword@mongodb:27017/web3games?authSource=admin"
+  hardhat_rpc_url: "http://hardhat:8545"
+  next_public_rpc_url: "http://localhost:8545"

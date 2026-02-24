@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: web3games-dev
+  namespace: web3games-dev
+
+namespace: web3games-dev
+
+commonLabels:
+  environment: dev
+  app: web3games
+
+resources:
+  - configmap.yaml
+  - backend.yaml
+  - frontend.yaml
+  - hardhat.yaml
+
+commonAnnotations:
+  deployment-type: continuous
+  gitops: "true"

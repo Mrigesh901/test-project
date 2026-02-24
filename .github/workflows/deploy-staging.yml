@@ -1,0 +1,316 @@
+name: Deploy to Staging (K3s) - Blue-Green
+
+on:
+  push:
+    branches:
+      - release
+    tags:
+      - 'v*'
+    paths:
+      - 'server/**'
+      - 'src/**'
+      - 'public/**'
+      - 'contracts/**'
+      - 'hardhat/**'
+      - 'Dockerfile.*'
+      - 'k8s/staging/**'
+      - '.github/workflows/deploy-staging.yml'
+
+env:
+  REGISTRY: ghcr.io
+  REGISTRY_USERNAME: ${{ github.actor }}
+  DEPLOY_ENV: staging
+  K8S_NAMESPACE: web3games-staging
+  AWS_REGION: us-east-1
+  CANARY_DURATION: 600  # 10 minutes in seconds
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - dockerfile: Dockerfile.backend
+            image_name: test-project-backend
+            context: .
+          - dockerfile: Dockerfile.frontend
+            image_name: test-project-frontend
+            context: .
+          - dockerfile: Dockerfile.hardhat
+            image_name: test-project-hardhat
+            context: hardhat
+
+    outputs:
+      backend-image: ${{ steps.images.outputs.backend-image }}
+      frontend-image: ${{ steps.images.outputs.frontend-image }}
+      hardhat-image: ${{ steps.images.outputs.hardhat-image }}
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine version from tag or branch
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            # VERSION="${{ github.ref }}" | sed 's|refs/tags/||'
+            VERSION=$(echo "${{ github.ref }}" | sed 's|refs/tags/||')
+          elif [[ "${{ github.ref }}" == "refs/heads/release" ]]; then
+            VERSION="v1.0.0-rc.${{ github.run_number }}"
+          else
+            VERSION="v1.0.0-staging"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Deploying version: ${VERSION}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push images
+        id: images
+        run: |
+          for image in "test-project-backend" "test-project-frontend" "test-project-hardhat"; do
+            case $image in
+              "test-project-backend")
+                CONTEXT="."
+                DOCKERFILE="Dockerfile.backend"
+                ;;
+              "test-project-frontend")
+                CONTEXT="."
+                DOCKERFILE="Dockerfile.frontend"
+                ;;
+              "test-project-hardhat")
+                CONTEXT="hardhat"
+                DOCKERFILE="Dockerfile.hardhat"
+                ;;
+            esac
+            
+            IMAGE_URL="${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/${image}:${{ steps.version.outputs.version }}"
+            docker buildx build --push \
+              --tag "${IMAGE_URL}" \
+              --tag "${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/${image}:latest-staging" \
+              -f "${DOCKERFILE}" "${CONTEXT}"
+            
+            echo "${image}-image=${IMAGE_URL}" >> $GITHUB_OUTPUT
+          done
+
+  blue-green-deploy:
+    runs-on: self-hosted
+    needs: build-and-push
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # - name: Configure AWS credentials
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     aws-region: ${{ env.AWS_REGION }}
+
+
+      - name: Set kubectl context
+        run: |
+          export KUBECONFIG=/home/ec2-user/.kube/config
+          kubectl config set-context k3s-staging || kubectl config use-context k3s-staging
+          kubectl cluster-info
+
+      - name: Create namespace if not exists
+        run: |
+          export KUBECONFIG=/home/ec2-user/.kube/config
+          kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create image pull secret
+        run: |
+          export KUBECONFIG=/home/ec2-user/.kube/config
+          kubectl create secret docker-registry ghcr-secret \
+            --docker-server=${{ env.REGISTRY }} \
+            --docker-username=${{ env.REGISTRY_USERNAME }} \
+            --docker-password=${{ secrets.GITHUB_TOKEN }} \
+            --docker-email=${{ github.actor }}@github.com \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Identify current active deployment (blue or green)
+        id: identify
+        run: |
+          export KUBECONFIG=/home/ec2-user/.kube/config
+          ACTIVE=$(kubectl get service -n ${{ env.K8S_NAMESPACE }} active-backend -o jsonpath='{.spec.selector.slot}' 2>/dev/null || echo "blue")
+          if [ "$ACTIVE" == "blue" ]; then
+            INACTIVE="green"
+          else
+            INACTIVE="blue"
+          fi
+          echo "active=${ACTIVE}" >> $GITHUB_OUTPUT
+          echo "inactive=${INACTIVE}" >> $GITHUB_OUTPUT
+          echo "Switching from $ACTIVE to $INACTIVE"
+
+      - name: Deploy to inactive slot
+        run: |
+          export KUBECONFIG=/home/ec2-user/.kube/config
+          SLOT=${{ steps.identify.outputs.inactive }}
+          
+          # Deploy backend
+          kubectl set image deployment/backend-${SLOT} \
+            backend=${{ needs.build-and-push.outputs.backend-image }} \
+            -n ${{ env.K8S_NAMESPACE }} 2>/dev/null || \
+          kubectl apply -f - <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: backend-${SLOT}
+            namespace: ${{ env.K8S_NAMESPACE }}
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: backend
+                slot: ${SLOT}
+            template:
+              metadata:
+                labels:
+                  app: backend
+                  slot: ${SLOT}
+              spec:
+                imagePullSecrets:
+                  - name: ghcr-secret
+                containers:
+                  - name: backend
+                    image: ${{ needs.build-and-push.outputs.backend-image }}
+                    ports:
+                      - containerPort: 4000
+                    env:
+                      - name: NODE_ENV
+                        value: staging
+                      - name: PORT
+                        value: "4000"
+                      - name: MONGODB_URI
+                        valueFrom:
+                          configMapKeyRef:
+                            name: staging-config
+                            key: mongodb_uri
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: 4000
+                      initialDelaySeconds: 30
+                      periodSeconds: 10
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: 4000
+                      initialDelaySeconds: 10
+                      periodSeconds: 5
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 128Mi
+                      limits:
+                        cpu: 500m
+                        memory: 512Mi
+          EOF
+          
+          kubectl rollout status deployment/backend-${SLOT} \
+            -n ${{ env.K8S_NAMESPACE }} --timeout=5m
+
+      - name: Health check on inactive slot (canary)
+        id: health-check
+        run: |
+          export KUBECONFIG=/home/ec2-user/.kube/config
+          SLOT=${{ steps.identify.outputs.inactive }}
+          
+          echo "Waiting ${{ env.CANARY_DURATION }}s for health checks..."
+          
+          # Port-forward and health check
+          kubectl port-forward -n ${{ env.K8S_NAMESPACE }} \
+            svc/backend-${SLOT} 4000:4000 &
+          PF_PID=$!
+          
+          sleep 5  # Let port-forward establish
+          
+          START_TIME=$(date +%s)
+          END_TIME=$((START_TIME + ${{ env.CANARY_DURATION }}))
+          FAILED_CHECKS=0
+          
+          while [ $(date +%s) -lt $END_TIME ]; do
+            if curl -f http://localhost:4000/ > /dev/null 2>&1; then
+              echo "✅ Health check passed at $(date)"
+            else
+              ((FAILED_CHECKS++))
+              echo "⚠️  Health check failed (attempt $FAILED_CHECKS)"
+              if [ $FAILED_CHECKS -gt 3 ]; then
+                kill $PF_PID || true
+                echo "❌ Too many failures, marking deployment as unhealthy"
+                exit 1
+              fi
+            fi
+            sleep 30
+          done
+          
+          kill $PF_PID || true
+          echo "✅ Canary period completed successfully"
+
+      - name: Switch traffic to new deployment
+        if: success()
+        run: |
+          export KUBECONFIG=/home/ec2-user/.kube/config
+          INACTIVE=${{ steps.identify.outputs.inactive }}
+          
+          echo "Switching traffic to ${INACTIVE}"
+          
+          # Update service selector to point to inactive (now active)
+          kubectl patch service active-backend \
+            -n ${{ env.K8S_NAMESPACE }} \
+            -p '{"spec":{"selector":{"slot":"'${INACTIVE}'"}}}'
+          
+          echo "✅ Traffic switched to $INACTIVE"
+
+      - name: Verify new deployment
+        run: |
+          export KUBECONFIG=/home/ec2-user/.kube/config
+          echo "=== Active Deployment ===" 
+          kubectl get deployment -n ${{ env.K8S_NAMESPACE }}
+          echo "=== Pods ==="
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }}
+          echo "=== Service Info ==="
+          kubectl get svc -n ${{ env.K8S_NAMESPACE }}
+
+      - name: Automatic Rollback on failure
+        if: failure()
+        run: |
+          export KUBECONFIG=/home/ec2-user/.kube/config
+          ACTIVE=${{ steps.identify.outputs.active }}
+          
+          echo "⚠️  Deployment failed, rolling back to $ACTIVE"
+          
+          # Revert service selector to previously active
+          kubectl patch service active-backend \
+            -n ${{ env.K8S_NAMESPACE }} \
+            -p '{"spec":{"selector":{"slot":"'${ACTIVE}'"}}}'
+          
+          echo "✅ Rolled back to $ACTIVE"
+          exit 1
+
+      - name: Deploy complete notification
+        if: success()
+        run: |
+          echo "🎉 Staging deployment completed successfully"
+          echo "Version: ${{ needs.build-and-push.outputs.version }}"
+          echo "Active slot: ${{ steps.identify.outputs.inactive }}"
+          echo "Canary period: ${{ env.CANARY_DURATION }}s"

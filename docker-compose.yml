@@ -1,0 +1,250 @@
+networks:
+  web3games:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  mongodb_data:
+    driver: local
+  hardhat_artifacts:
+    driver: local
+  registry_data:
+    driver: local
+
+services:
+
+  mongodb:
+    image: mongo:6.0
+    container_name: web3games-mongodb
+    restart: unless-stopped
+    networks:
+      - web3games
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: devpassword
+      MONGO_INITDB_DATABASE: web3games
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  hardhat:
+    build:
+      context: ./hardhat
+      dockerfile: ../Dockerfile.hardhat
+    container_name: web3games-hardhat
+    restart: unless-stopped
+    networks:
+      - web3games
+    ports:
+      - "8545:8545"
+    volumes:
+      - hardhat_artifacts:/app/artifacts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-X", "POST", "-H", "Content-Type: application/json", "--data", "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}", "http://localhost:8545"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  deployer:
+    build:
+      context: ./hardhat
+      dockerfile: ../Dockerfile.hardhat
+    container_name: web3games-deployer
+    restart: "no"
+    networks:
+      - web3games
+    volumes:
+      - hardhat_artifacts:/app/artifacts
+    environment:
+      HARDHAT_NETWORK_URL: http://hardhat:8545
+    depends_on:
+      hardhat:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Deploying contract...' &&
+        ./node_modules/.bin/hardhat run scripts/deploy/deploy.js --network localhost &&
+        echo 'Done'
+      "
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: web3games-backend
+    restart: unless-stopped
+    networks:
+      - web3games
+    ports:
+      - "4000:4000"
+    volumes:
+      - hardhat_artifacts:/app/artifacts:ro
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      MONGODB_URI: mongodb://admin:devpassword@mongodb:27017/web3games?authSource=admin
+      NEXT_PUBLIC_RPC_URL: http://hardhat:8545
+      HARDHAT_RPC_URL: http://hardhat:8545
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      hardhat:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: web3games-frontend
+    restart: unless-stopped
+    networks:
+      - web3games
+    ports:
+      - "3002:3000"
+    volumes:
+      - hardhat_artifacts:/app/artifacts:ro
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_RPC_URL: http://localhost:8545
+      GAME_ASSET_REGISTRY_ADDRESS: ""
+    depends_on:
+      backend:
+        condition: service_healthy
+    # Healthcheck disabled - frontend app is running when logs show "Ready in Xms"
+    # Port 3000 is listening on the container's internal IP within the compose network
+    # Using "depends_on: service_healthy" below is not reliable, so rely on service_started
+
+# ─────────────────────────────────────────────────────────────────────────
+  # Private Container Registry (free, self-hosted)
+  # ─────────────────────────────────────────────────────────────────────────
+  registry:
+    image: registry:2
+    container_name: web3games-registry
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - registry_data:/var/lib/registry
+      - ./registry-config.yml:/etc/docker/registry/config.yml:ro
+    environment:
+      REGISTRY_LOG_LEVEL: info
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5000/v2/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  registry-ui:
+    image: joxit/docker-registry-ui:latest
+    container_name: web3games-registry-ui
+    restart: unless-stopped
+    ports:
+      - "5001:80"
+    environment:
+      REGISTRY_TITLE: "Web3Games Private Registry"
+      REGISTRY_URL: http://registry:5000
+      DELETE_IMAGES: "true"
+    depends_on:
+      registry:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Vulnerability Scanner - Trivy (multi-image scanning)
+  # Scans all project images for vulnerabilities
+  # ─────────────────────────────────────────────────────────────────────────
+  scanner-trivy:
+    image: aquasec/trivy:latest
+    container_name: web3games-scanner-trivy
+    restart: "no"
+    profiles:
+      - scan
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./trivy-cache:/root/.cache/trivy
+      - ./scan-reports:/mnt/reports
+    environment:
+      TRIVY_FORMAT: json
+      TRIVY_OUTPUT: /mnt/reports/trivy-report.json
+      TRIVY_EXIT_CODE: "1"
+      TRIVY_SEVERITY: HIGH,CRITICAL
+    command: >
+      image
+      --scanners vuln,config,secret
+      --severity HIGH,CRITICAL
+      --exit-code 0
+      --format sarif
+      --output /mnt/reports/trivy-sarif.sarif
+      web3games-frontend:latest
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Vulnerability Scanner - Grype (additional supply chain security)
+  # Complements Trivy with additional vulnerability database checks
+  # ─────────────────────────────────────────────────────────────────────────
+  scanner-grype:
+    image: anchore/grype:latest
+    container_name: web3games-scanner-grype
+    restart: "no"
+    profiles:
+      - scan
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./scan-reports:/mnt/reports
+    environment:
+      GRYPE_CHECK_FOR_APP_UPDATE: "false"
+    command: >
+      docker:web3games-frontend:latest
+      --output json
+      --file /mnt/reports/grype-report.json
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Image Security Scanning Service - Snyk (requires API key, optional)
+  # For supply chain security analysis - requires SNYK_TOKEN env var
+  # ─────────────────────────────────────────────────────────────────────────
+  # scanner-snyk:
+  #   image: snyk/snyk:docker
+  #   container_name: web3games-scanner-snyk
+  #   restart: "no"
+  #   profiles:
+  #     - scan
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - ./scan-reports:/mnt/reports
+  #   environment:
+  #     SNYK_TOKEN: ${SNYK_TOKEN}
+  #   command: >
+  #     container test web3games-frontend:latest
+  #     --json > /mnt/reports/snyk-report.json
+
+  scanner:
+    image: aquasec/trivy:latest
+    container_name: web3games-scanner
+    restart: "no"
+    profiles:
+      - scan
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./trivy-cache:/root/.cache/trivy
+    command: >
+      image
+      --severity HIGH,CRITICAL
+      --exit-code 1
+      --format table
+      web3games-frontend:latest

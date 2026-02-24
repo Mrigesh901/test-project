@@ -1,0 +1,20 @@
+{
+  "name": "web3games-hardhat",
+  "version": "1.0.0",
+  "description": "Hardhat EVM node and contract deployment",
+  "private": true,
+  "scripts": {
+    "node": "hardhat node --hostname 0.0.0.0",
+    "deploy": "hardhat run scripts/deploy/deploy.ts --network localhost",
+    "test": "hardhat test",
+    "compile": "hardhat compile"
+  },
+  "devDependencies": {
+    "hardhat": "^2.28.6",
+    "@nomicfoundation/hardhat-toolbox": "^6.0.0",
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0",
+    "dotenv": "^16.4.5"
+  }
+}

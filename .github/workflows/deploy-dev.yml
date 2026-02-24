@@ -1,0 +1,175 @@
+name: Deploy to Dev (Minikube)
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - 'server/**'
+      - 'src/**'
+      - 'public/**'
+      - 'contracts/**'
+      - 'hardhat/**'
+      - 'Dockerfile.*'
+      - 'k8s/dev/**'
+      - '.github/workflows/deploy-dev.yml'
+
+env:
+  REGISTRY: ghcr.io
+  REGISTRY_USERNAME: ${{ github.actor }}
+  DEPLOY_ENV: dev
+  K8S_NAMESPACE: web3games-dev
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - dockerfile: Dockerfile.backend
+            image_name: test-project-backend
+            context: .
+          - dockerfile: Dockerfile.frontend
+            image_name: test-project-frontend
+            context: .
+          - dockerfile: Dockerfile.hardhat
+            image_name: test-project-hardhat
+            context: hardhat
+
+    outputs:
+      backend-image: ${{ steps.tag-backend.outputs.image }}
+      frontend-image: ${{ steps.tag-frontend.outputs.image }}
+      hardhat-image: ${{ steps.tag-hardhat.outputs.image }}
+      tag: ${{ steps.tag.outputs.tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate image tag
+        id: tag
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          TAG="dev-${SHORT_SHA}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Built images will be tagged: ${TAG}"
+
+      - name: Set backend image info
+        id: tag-backend
+        if: matrix.image_name == 'test-project-backend'
+        run: |
+          echo "image=${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/test-project-backend:${{ steps.tag.outputs.tag }}" >> $GITHUB_OUTPUT
+
+      - name: Set frontend image info
+        id: tag-frontend
+        if: matrix.image_name == 'test-project-frontend'
+        run: |
+          echo "image=${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/test-project-frontend:${{ steps.tag.outputs.tag }}" >> $GITHUB_OUTPUT
+
+      - name: Set hardhat image info
+        id: tag-hardhat
+        if: matrix.image_name == 'test-project-hardhat'
+        run: |
+          echo "image=${{ env.REGISTRY }}/${{ env.REGISTRY_USERNAME }}/test-project-hardhat:${{ steps.tag.outputs.tag }}" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ./${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ghcr.io/${{ env.REGISTRY_USERNAME }}/${{ matrix.image_name }}:${{ steps.tag.outputs.tag }}
+            ghcr.io/${{ env.REGISTRY_USERNAME }}/${{ matrix.image_name }}:latest-dev
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-to-minikube:
+    runs-on: self-hosted  # Must run on machine with Minikube
+    needs: build-and-push
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set Minikube context
+        run: |
+          kubectl config use-context minikube
+          kubectl cluster-info
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace ${{ env.K8S_NAMESPACE }} environment=dev --overwrite
+
+      - name: Create image pull secret
+        run: |
+          kubectl create secret docker-registry ghcr-secret \
+            --docker-server=${{ env.REGISTRY }} \
+            --docker-username=${{ env.REGISTRY_USERNAME }} \
+            --docker-password=${{ secrets.GITHUB_TOKEN }} \
+            --docker-email=${{ github.actor }}@github.com \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy with Kustomize
+        run: |
+          kustomize build k8s/dev | kubectl apply -f -
+          kubectl set image deployment/backend \
+            backend=${{ needs.build-and-push.outputs.backend-image }} \
+            -n ${{ env.K8S_NAMESPACE }}
+          kubectl set image deployment/frontend \
+            frontend=${{ needs.build-and-push.outputs.frontend-image }} \
+            -n ${{ env.K8S_NAMESPACE }}
+          kubectl set image deployment/hardhat \
+            hardhat=${{ needs.build-and-push.outputs.hardhat-image }} \
+            -n ${{ env.K8S_NAMESPACE }}
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/backend -n ${{ env.K8S_NAMESPACE }} --timeout=5m
+          kubectl rollout status deployment/frontend -n ${{ env.K8S_NAMESPACE }} --timeout=5m
+
+      - name: Verify deployments
+        run: |
+          echo "=== Deployment Status ==="
+          kubectl get deployments -n ${{ env.K8S_NAMESPACE }}
+          echo "=== Pod Status ==="
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }}
+          echo "=== Services ==="
+          kubectl get svc -n ${{ env.K8S_NAMESPACE }}
+
+      - name: Post deployment info
+        run: |
+          echo "✅ Dev deployment successful!"
+          echo "Namespace: ${{ env.K8S_NAMESPACE }}"
+          echo "Forward ports to access:"
+          echo "  kubectl port-forward -n ${{ env.K8S_NAMESPACE }} svc/backend 4000:4000 &"
+          echo "  kubectl port-forward -n ${{ env.K8S_NAMESPACE }} svc/frontend 3002:80 &"
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "🚀 Dev deployment completed successfully"
+          else
+            echo "❌ Dev deployment failed"
+            exit 1
+          fi

@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dockerfile.backend — Express.js API Server (Multi-Stage Build)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The backend is simpler than the frontend — no compilation step, it's plain
+# JavaScript. But we still use two stages:
+#   Stage 1: install deps (including devDeps for any potential tooling)
+#   Stage 2: runtime with only production deps
+#
+# WHY STILL MULTI-STAGE FOR PLAIN JS?
+# Without multi-stage, you'd either:
+#   a) Include devDependencies in production (bloat + security risk)
+#   b) Run npm install --production in a single stage (loses caching benefits)
+#
+# Multi-stage lets us:
+#   1. Cache full npm install separately from source code
+#   2. Carry only node_modules (no package-lock, no .npmrc) into runtime
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Stage 1: Dependencies ─────────────────────────────────────────────────────
+FROM node:18-alpine AS deps
+
+# Why these packages?
+# libc6-compat: compatibility shim for native modules on Alpine
+# dumb-init: proper PID 1 handling (explained below in Stage 2)
+RUN apk add --no-cache libc6-compat dumb-init
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+
+# --omit=dev installs ONLY production dependencies
+# This is what goes into our final image — no jest, no eslint, etc.
+RUN npm install --omit=dev
+
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+FROM node:18-alpine AS runner
+
+# Install dumb-init in the runtime stage
+# WHY DUMB-INIT?
+# When you run `node server.js` as PID 1 in a container, Node.js doesn't
+# properly handle Unix signals (SIGTERM, SIGINT). When Docker tries to stop
+# the container gracefully, Node ignores it and Docker force-kills it after
+# 10 seconds (SIGKILL). This means:
+#   - In-flight requests are dropped
+#   - Database connections aren't closed cleanly
+#   - MongoDB might see corrupted writes
+#
+# dumb-init is a tiny init process that runs AS PID 1 and properly forwards
+# signals to your Node process. SIGTERM → graceful shutdown.
+# This is "graceful shutdown" — critical for production.
+RUN apk add --no-cache dumb-init
+
+WORKDIR /app
+
+# Non-root user for security
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser  --system --uid 1001 express
+
+ENV NODE_ENV=production
+ENV PORT=4000
+
+# Copy production node_modules from Stage 1
+COPY --from=deps --chown=express:nodejs /app/node_modules ./node_modules
+
+# Copy application source
+# We copy specific directories, not the entire project, to avoid
+# accidentally including .env files, test files, contracts/, etc.
+COPY --chown=express:nodejs server/ ./server/
+
+USER express
+
+EXPOSE 4000
+
+# Health check hits the Express root endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD wget -qO- http://localhost:4000/ || exit 1
+
+# dumb-init wraps node — it's PID 1, node is its child
+# Signals flow: Docker → dumb-init → node → graceful shutdown
+CMD ["dumb-init", "node", "server/server.js"]

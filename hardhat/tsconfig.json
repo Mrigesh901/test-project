@@ -31,17 +31,13 @@
     "**/*.ts",
     "**/*.tsx"
   ],
-  "exclude": [
+"exclude": [
     "node_modules",
-    "hardhat",
     "hardhat.config.ts",
-    "tsconfig.hardhat.json",
     "contracts",
     "scripts",
     "test",
-    "dist-hardhat",
-    "cache",
-    "typechain-types",
-    ".next"
+    "tsconfig.hardhat.json",
+    "dist-hardhat"
   ]
 }

@@ -55,7 +55,8 @@
     "room-populate": "^1.0.13",
     "sass": "^1.51.0",
     "uuid": "^8.3.2",
-    "validator": "^13.12.0"
+    "validator": "^13.12.0",
+    "ethers": "^6.0.0"
   },
   "devDependencies": {
     "@tailwindcss/line-clamp": "^0.4.2",
