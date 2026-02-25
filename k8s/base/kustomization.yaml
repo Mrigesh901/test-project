@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: web3games-dev
+
+resources:
+  - namespace.yaml
+  - mongodb.yaml
+  - hardhat.yaml
+  - hardhat-deployer-job.yaml
+  - backend.yaml
+  - frontend.yaml
+  - ingress.yaml
+  - network-policy.yaml
+  - hpa.yaml
+  - pdb.yaml
+  # - monitoring.yaml  # Uncomment if Prometheus Operator is installed
+
+# Common labels applied to all resources
+commonLabels:
+  project: web3games
+  managed-by: kustomize
+
+# Common annotations applied to all resources
+commonAnnotations:
+  gitops.tool: kustomize
+  deployment.type: kubernetes
+
+# Images will be updated by CI/CD or manually
+# Format: newName:newTag
+images:
+  - name: ghcr.io/Mrigesh901/test-project-backend
+    newTag: latest-dev
+  - name: ghcr.io/Mrigesh901/test-project-frontend
+    newTag: latest-dev
+  - name: ghcr.io/Mrigesh901/test-project-hardhat
+    newTag: latest-dev

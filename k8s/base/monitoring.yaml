@@ -1,0 +1,82 @@
+---
+# ServiceMonitor for Prometheus Operator
+# Automatically scrapes metrics from services
+# Requires Prometheus Operator to be installed
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backend-metrics
+  namespace: web3games-dev
+  labels:
+    app: backend
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  endpoints:
+    - port: http
+      interval: 30s
+      path: /metrics  # Adjust if your app exposes metrics on different path
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: frontend-metrics
+  namespace: web3games-dev
+  labels:
+    app: frontend
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+  endpoints:
+    - port: http
+      interval: 30s
+      path: /metrics
+
+---
+# ConfigMap for Grafana Dashboard (optional)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-web3games
+  namespace: web3games-dev
+  labels:
+    grafana_dashboard: "1"
+data:
+  web3games-dashboard.json: |
+    {
+      "dashboard": {
+        "title": "Web3Games Monitoring",
+        "panels": [
+          {
+            "title": "Backend Request Rate",
+            "targets": [
+              {
+                "expr": "rate(http_requests_total{app=\"backend\"}[5m])"
+              }
+            ]
+          },
+          {
+            "title": "Pod CPU Usage",
+            "targets": [
+              {
+                "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"web3games-dev\"}[5m])) by (pod)"
+              }
+            ]
+          },
+          {
+            "title": "Pod Memory Usage",
+            "targets": [
+              {
+                "expr": "sum(container_memory_working_set_bytes{namespace=\"web3games-dev\"}) by (pod)"
+              }
+            ]
+          }
+        ]
+      }
+    }

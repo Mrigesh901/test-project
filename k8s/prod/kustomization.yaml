@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: web3games-prod
+
+# Reference to base configuration
+bases:
+  - ../base
+
+# Environment-specific labels
+commonLabels:
+  environment: production
+
+# Patches for production environment
+patchesStrategicMerge:
+  - replica-patch.yaml
+  - resource-patch.yaml
+  - security-patch.yaml
+
+# ConfigMap generator for environment-specific config
+configMapGenerator:
+  - name: environment-config
+    literals:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=info
+      - DEBUG=false
+
+# Production requires higher replica counts and security
+# Secret management should use sealed-secrets or external-secrets
+
+# Name suffix to avoid conflicts
+nameSuffix: -prod

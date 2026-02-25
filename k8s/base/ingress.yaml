@@ -1,0 +1,102 @@
+---
+# Ingress for exposing services externally
+# Requires an Ingress Controller (Traefik is default in k3s)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web3games-ingress
+  namespace: web3games-dev
+  labels:
+    app: web3games
+  annotations:
+    # k3s uses Traefik by default
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    # Uncomment for Let's Encrypt SSL (requires cert-manager)
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: traefik  # k3s default
+  rules:
+  - host: web3games-dev.local  # Change to your domain
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: backend
+            port:
+              number: 4000
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend
+            port:
+              number: 3000
+  # Uncomment for SSL
+  # tls:
+  # - hosts:
+  #   - web3games-dev.local
+  #   secretName: web3games-tls
+
+---
+# NodePort Service for direct access (development)
+# Exposes frontend on a specific port on all nodes
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-nodeport
+  namespace: web3games-dev
+  labels:
+    app: frontend
+spec:
+  type: NodePort
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30002  # Accessible at http://<node-ip>:30002
+      protocol: TCP
+      name: http
+  selector:
+    app: frontend
+
+---
+# NodePort Service for backend direct access (development)
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-nodeport
+  namespace: web3games-dev
+  labels:
+    app: backend
+spec:
+  type: NodePort
+  ports:
+    - port: 4000
+      targetPort: 4000
+      nodePort: 30004  # Accessible at http://<node-ip>:30004
+      protocol: TCP
+      name: http
+  selector:
+    app: backend
+
+---
+# NodePort Service for Hardhat RPC (development/testing)
+apiVersion: v1
+kind: Service
+metadata:
+  name: hardhat-nodeport
+  namespace: web3games-dev
+  labels:
+    app: hardhat
+spec:
+  type: NodePort
+  ports:
+    - port: 8545
+      targetPort: 8545
+      nodePort: 30545  # Accessible at http://<node-ip>:30545
+      protocol: TCP
+      name: rpc
+  selector:
+    app: hardhat

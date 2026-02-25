@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: web3games-dev
+  labels:
+    name: web3games-dev
+    environment: development

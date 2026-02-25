@@ -1,0 +1,140 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+  namespace: web3games-dev
+data:
+  NODE_ENV: "production"
+  NEXT_TELEMETRY_DISABLED: "1"
+  # This RPC URL will be accessible from the browser
+  # In production, this should point to a public endpoint or ingress
+  NEXT_PUBLIC_RPC_URL: "http://localhost:8545"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: web3games-dev
+  labels:
+    app: frontend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: 3000
+      protocol: TCP
+      name: http
+  selector:
+    app: frontend
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: web3games-dev
+  labels:
+    app: frontend
+spec:
+  replicas: 2  # Multiple replicas for high availability
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Ensure zero downtime
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+      annotations:
+        # Force pod restart when ConfigMap changes
+        checksum/config: "{{ include (print $.Template.BasePath \"/frontend-configmap.yaml\") . | sha256sum }}"
+    spec:
+      # Ensure frontend doesn't schedule on same node as hardhat if possible
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - hardhat
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+      # Wait for backend to be ready
+      - name: wait-for-backend
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for backend to be ready..."
+          until nc -z backend 4000; do
+            echo "Backend not ready yet, waiting..."
+            sleep 3
+          done
+          echo "Backend is ready!"
+      containers:
+      - name: frontend
+        image: ghcr.io/Mrigesh901/test-project-frontend:latest-dev  # Will be updated by CI/CD
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+        envFrom:
+        - configMapRef:
+            name: frontend-config
+        env:
+        - name: GAME_ASSET_REGISTRY_ADDRESS
+          value: ""  # Will be populated from artifacts or ConfigMap
+        volumeMounts:
+        - name: artifacts
+          mountPath: /app/artifacts
+          readOnly: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        # Note: Frontend healthcheck is tricky with Next.js standalone
+        # Using TCP check instead of HTTP
+        livenessProbe:
+          tcpSocket:
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          tcpSocket:
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        # Graceful shutdown configuration
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - sh
+              - -c
+              - sleep 15  # Give time for connections to drain
+      volumes:
+      - name: artifacts
+        persistentVolumeClaim:
+          claimName: hardhat-artifacts
+      imagePullSecrets:
+      - name: ghcr-secret
+      # Ensure graceful termination
+      terminationGracePeriodSeconds: 30

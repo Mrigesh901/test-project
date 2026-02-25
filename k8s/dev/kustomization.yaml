@@ -1,22 +1,35 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-metadata:
-  name: web3games-dev
-  namespace: web3games-dev
-
 namespace: web3games-dev
 
+# Reference to base configuration
+bases:
+  - ../base
+
+# Environment-specific labels
 commonLabels:
-  environment: dev
-  app: web3games
+  environment: development
 
-resources:
-  - configmap.yaml
-  - backend.yaml
-  - frontend.yaml
-  - hardhat.yaml
+# Patches for development environment
+patchesStrategicMerge:
+  - replica-patch.yaml
+  - resource-patch.yaml
 
-commonAnnotations:
-  deployment-type: continuous
-  gitops: "true"
+# ConfigMap generator for environment-specific config
+configMapGenerator:
+  - name: environment-config
+    literals:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=debug
+      - DEBUG=true
+
+# Secret generator (DO NOT commit real secrets to git)
+# Use sealed-secrets or external-secrets operator in production
+secretGenerator:
+  - name: dev-secrets
+    literals:
+      - API_KEY=dev-api-key-change-me
+
+# Name suffix to avoid conflicts
+nameSuffix: -dev

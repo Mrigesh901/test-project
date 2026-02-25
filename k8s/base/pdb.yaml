@@ -1,0 +1,40 @@
+---
+# Pod Disruption Budget for Backend
+# Ensures at least 1 pod is always available during voluntary disruptions
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  namespace: web3games-dev
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: backend
+
+---
+# Pod Disruption Budget for Frontend
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend-pdb
+  namespace: web3games-dev
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: frontend
+
+---
+# Pod Disruption Budget for MongoDB
+# For StatefulSet, ensure at least 1 replica is available
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mongodb-pdb
+  namespace: web3games-dev
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: mongodb

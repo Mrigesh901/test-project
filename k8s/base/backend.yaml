@@ -1,0 +1,157 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: web3games-dev
+data:
+  NODE_ENV: "production"
+  PORT: "4000"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: web3games-dev
+  labels:
+    app: backend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 4000
+      targetPort: 4000
+      protocol: TCP
+      name: http
+  selector:
+    app: backend
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: web3games-dev
+  labels:
+    app: backend
+spec:
+  replicas: 2  # Multiple replicas for high availability
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Ensure zero downtime
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+      annotations:
+        # Force pod restart when ConfigMap changes
+        checksum/config: "{{ include (print $.Template.BasePath \"/backend-configmap.yaml\") . | sha256sum }}"
+    spec:
+      # Ensure backend doesn't schedule on same node as hardhat if possible
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - hardhat
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+      # Wait for MongoDB to be ready
+      - name: wait-for-mongodb
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for MongoDB to be ready..."
+          until nc -z mongodb 27017; do
+            echo "MongoDB not ready yet, waiting..."
+            sleep 3
+          done
+          echo "MongoDB is ready!"
+      # Wait for Hardhat node to be ready (optional but recommended)
+      - name: wait-for-hardhat
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for Hardhat node to be ready..."
+          until nc -z hardhat 8545; do
+            echo "Hardhat not ready yet, waiting..."
+            sleep 3
+          done
+          echo "Hardhat node is ready!"
+      containers:
+      - name: backend
+        image: ghcr.io/Mrigesh901/test-project-backend:latest-dev  # Will be updated by CI/CD
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 4000
+          name: http
+        envFrom:
+        - configMapRef:
+            name: backend-config
+        env:
+        - name: MONGODB_URI
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: connection-string
+        - name: HARDHAT_RPC_URL
+          value: "http://hardhat:8545"
+        - name: NEXT_PUBLIC_RPC_URL
+          value: "http://hardhat:8545"
+        volumeMounts:
+        - name: artifacts
+          mountPath: /app/artifacts
+          readOnly: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 4000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 4000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        # Graceful shutdown configuration
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - sh
+              - -c
+              - sleep 15  # Give time for connections to drain
+      volumes:
+      - name: artifacts
+        persistentVolumeClaim:
+          claimName: hardhat-artifacts
+      imagePullSecrets:
+      - name: ghcr-secret
+      # Ensure graceful termination
+      terminationGracePeriodSeconds: 30

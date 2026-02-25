@@ -1,0 +1,72 @@
+---
+# This Job deploys smart contracts to the Hardhat network
+# It runs once and completes successfully, preventing CrashLoopBackOff
+# The Job can be re-triggered manually or by CI/CD when contracts change
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hardhat-deployer
+  namespace: web3games-dev
+  labels:
+    app: hardhat-deployer
+  annotations:
+    # This annotation allows the Job to be replaced during updates
+    # Without it, you'd need to delete the old Job before creating a new one
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  # Do not automatically restart on failure - manual intervention required
+  backoffLimit: 2
+  # Clean up completed Jobs after 1 hour
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: hardhat-deployer
+    spec:
+      restartPolicy: Never  # Critical: Job should not restart on completion
+      initContainers:
+      # Wait for Hardhat node to be ready before deploying
+      - name: wait-for-hardhat
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for Hardhat node to be ready..."
+          until nc -z hardhat 8545; do
+            echo "Hardhat not ready yet, waiting..."
+            sleep 5
+          done
+          echo "Hardhat node is ready!"
+          sleep 10  # Additional grace period
+      containers:
+      - name: deployer
+        image: ghcr.io/Mrigesh901/test-project-hardhat:latest-dev  # Will be updated by CI/CD
+        imagePullPolicy: Always
+        command:
+        - sh
+        - -c
+        - |
+          echo "Starting contract deployment..."
+          ./node_modules/.bin/hardhat run scripts/deploy/deploy.js --network localhost
+          echo "Deployment complete!"
+        env:
+        - name: HARDHAT_NETWORK_URL
+          value: "http://hardhat:8545"
+        volumeMounts:
+        - name: artifacts
+          mountPath: /app/artifacts
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: artifacts
+        persistentVolumeClaim:
+          claimName: hardhat-artifacts
+      imagePullSecrets:
+      - name: ghcr-secret
