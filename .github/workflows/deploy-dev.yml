@@ -68,7 +68,8 @@ jobs:
           username: ${{ steps.owner.outputs.owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push
+      # FIX: Configure npm registry and retry settings in build args
+      - name: Build and Push with npm fixes
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
@@ -83,6 +84,34 @@ jobs:
             org.opencontainers.image.source=${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+          # Add network mode and build args for npm registry issues
+          network: host
+          build-args: |
+            NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
+            NPM_CONFIG_FETCH_TIMEOUT=600000
+            NPM_CONFIG_FETCH_RETRIES=5
+          # Retry on failure
+        continue-on-error: false
+
+      # FIX: Add retry logic if build fails
+      - name: Retry build on failure
+        if: failure()
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ./${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.owner }}/${{ matrix.image_name }}:${{ steps.tag.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.owner }}/${{ matrix.image_name }}:latest-dev
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          network: host
+          build-args: |
+            NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
+            NPM_CONFIG_FETCH_TIMEOUT=600000
+            NPM_CONFIG_FETCH_RETRIES=5
+          no-cache: true  # Disable cache on retry
 
   deploy:
     runs-on: self-hosted
